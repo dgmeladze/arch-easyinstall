@@ -10,7 +10,7 @@ err() { echo -e "\n[ERROR] $*\n" >&2; exit 1; }
 say() { echo -e "\n==> $*\n"; }
 
 require_root() {
-  [[ "${EUID:-$(id -u)}" -eq 0 ]] || err "Запусти от root (sudo ./arch-installer-full.sh)."
+  [[ "${EUID:-$(id -u)}" -eq 0 ]] || err "Run as root (use sudo)."
 }
 
 is_uefi() { [[ -d /sys/firmware/efi ]]; }
@@ -25,7 +25,7 @@ prompt_nonempty() {
     v="${v//$'\r'/}"
     v="${v//$'\n'/}"
     [[ -n "$v" ]] && { printf -v "$__var" "%s" "$v"; return 0; }
-    echo "Значение не может быть пустым."
+    echo "Value cannot be empty."
   done
 }
 
@@ -35,9 +35,9 @@ prompt_password_twice() {
   local p1 p2
   while true; do
     read -rsp "$label: " p1; echo
-    read -rsp "Повтори $label: " p2; echo
-    [[ -n "$p1" ]] || { echo "Пароль не может быть пустым."; continue; }
-    [[ "$p1" == "$p2" ]] || { echo "Пароли не совпали, попробуй ещё раз."; continue; }
+    read -rsp "Repeat $label: " p2; echo
+    [[ -n "$p1" ]] || { echo "Password cannot be empty."; continue; }
+    [[ "$p1" == "$p2" ]] || { echo "Passwords do not match. Try again."; continue; }
     printf -v "$__var" "%s" "$p1"
     return 0
   done
@@ -55,9 +55,9 @@ pick_one() {
   done
   local choice
   while true; do
-    read -rp "Выбери номер: " choice
-    [[ "$choice" =~ ^[0-9]+$ ]] || { echo "Нужно число."; continue; }
-    (( choice >= 1 && choice <= ${#options[@]} )) || { echo "Диапазон 1..${#options[@]}"; continue; }
+    read -rp "Enter number: " choice
+    [[ "$choice" =~ ^[0-9]+$ ]] || { echo "Please enter a number."; continue; }
+    (( choice >= 1 && choice <= ${#options[@]} )) || { echo "Valid range: 1..${#options[@]}"; continue; }
     echo "${options[$((choice-1))]}"
     return 0
   done
@@ -94,77 +94,76 @@ enable_multilib_in_target() {
 # ===== Start =====
 require_root
 
-say "Проверка условий запуска"
-is_mountpoint /mnt || err "Не смонтирован /mnt. Сначала mount root -> /mnt."
+say "Pre-flight checks"
+is_mountpoint /mnt || err "/mnt is not mounted. Mount your root partition to /mnt first."
 
 if ! is_uefi; then
-  err "Ты загружен НЕ в UEFI. Перезагрузи ISO в UEFI режиме (иначе получится не тот GRUB)."
+  err "You are NOT booted in UEFI mode. Reboot the ISO in UEFI mode, otherwise you won't get UEFI GRUB."
 fi
 
-# ESP must be mounted inside /mnt
 EFI_DIR=""
 if is_mountpoint /mnt/boot/efi; then
   EFI_DIR="/boot/efi"
 elif is_mountpoint /mnt/efi; then
   EFI_DIR="/efi"
 else
-  err "UEFI найден, но ESP (FAT32) не смонтирован в /mnt/boot/efi или /mnt/efi.
-Пример:
+  err "UEFI is detected, but ESP (FAT32) is NOT mounted to /mnt/boot/efi or /mnt/efi.
+Example:
   mkdir -p /mnt/boot/efi
-  mount /dev/<esp> /mnt/boot/efi"
+  mount /dev/<esp-partition> /mnt/boot/efi"
 fi
 
-say "Ок. /mnt и ESP смонтированы. Можно продолжать."
+say "OK: /mnt and ESP are mounted. Continuing."
 
-echo "Текущее монтирование:"
+echo "Current mounts:"
 mount | grep -E "on /mnt($|/)|on /mnt/boot/efi|on /mnt/efi" || true
 echo
-echo "Диски:"
+echo "Block devices:"
 lsblk -f || true
 
-CONFIRM="$(pick_one "Продолжаем установку?" "Да" "Нет")"
-[[ "$CONFIRM" == "Да" ]] || exit 0
+CONFIRM="$(pick_one "Proceed with installation?" "Yes" "No")"
+[[ "$CONFIRM" == "Yes" ]] || exit 0
 
 # ===== User choices =====
-say "Настройки"
+say "Configuration"
 
 prompt_nonempty HOSTNAME "Hostname: "
 prompt_nonempty USERNAME "Username: "
-prompt_password_twice USER_PASS "Пароль пользователя"
+prompt_password_twice USER_PASS "User password"
 
-SET_ROOT="$(pick_one "Задать пароль root?" "Нет" "Да")"
+SET_ROOT="$(pick_one "Set root password?" "No" "Yes")"
 ROOT_PASS=""
-if [[ "$SET_ROOT" == "Да" ]]; then
-  prompt_password_twice ROOT_PASS "Пароль root"
+if [[ "$SET_ROOT" == "Yes" ]]; then
+  prompt_password_twice ROOT_PASS "Root password"
 fi
 
 # Timezone
 while true; do
-  read -rp "Timezone (например Europe/Moscow): " TZ
+  read -rp "Timezone (e.g. Europe/Amsterdam): " TZ
   TZ="${TZ//$'\r'/}"; TZ="${TZ//$'\n'/}"
-  [[ -n "$TZ" ]] || { echo "Timezone не может быть пустой."; continue; }
+  [[ -n "$TZ" ]] || { echo "Timezone cannot be empty."; continue; }
   if validate_timezone "$TZ"; then break; fi
-  echo "Неверная timezone. Примеры: Europe/Moscow, Europe/Amsterdam"
+  echo "Invalid timezone. Examples: Europe/Amsterdam, Europe/Moscow"
 done
 
-# Locales (simple presets + custom)
-LOCALE_PRESET="$(pick_one "Локали" "RU+EN (ru_RU + en_US)" "EN only (en_US)" "Custom")"
+# Locales presets + custom
+LOCALE_PRESET="$(pick_one "Locales" "EN only (en_US)" "EN+RU (en_US + ru_RU)" "Custom")"
 case "$LOCALE_PRESET" in
-  "RU+EN (ru_RU + en_US)")
-    LOCALES_RAW="en_US.UTF-8 UTF-8,ru_RU.UTF-8 UTF-8"
-    LANG_DEFAULT="en_US.UTF-8"
-    KEYMAP_DEFAULT="us"
-    ;;
   "EN only (en_US)")
     LOCALES_RAW="en_US.UTF-8 UTF-8"
     LANG_DEFAULT="en_US.UTF-8"
     KEYMAP_DEFAULT="us"
     ;;
+  "EN+RU (en_US + ru_RU)")
+    LOCALES_RAW="en_US.UTF-8 UTF-8,ru_RU.UTF-8 UTF-8"
+    LANG_DEFAULT="en_US.UTF-8"
+    KEYMAP_DEFAULT="us"
+    ;;
   "Custom")
-    read -rp "Locales (через запятую, пример: en_US.UTF-8 UTF-8,ru_RU.UTF-8 UTF-8): " LOCALES_RAW
+    read -rp "Locales to enable (comma-separated, example: en_US.UTF-8 UTF-8,ru_RU.UTF-8 UTF-8): " LOCALES_RAW
     LOCALES_RAW="${LOCALES_RAW//$'\r'/}"; LOCALES_RAW="${LOCALES_RAW//$'\n'/}"
     [[ -n "$LOCALES_RAW" ]] || LOCALES_RAW="en_US.UTF-8 UTF-8"
-    read -rp "Default LANG (пример: en_US.UTF-8): " LANG_DEFAULT
+    read -rp "Default LANG (example: en_US.UTF-8): " LANG_DEFAULT
     LANG_DEFAULT="${LANG_DEFAULT//$'\r'/}"; LANG_DEFAULT="${LANG_DEFAULT//$'\n'/}"
     [[ -n "$LANG_DEFAULT" ]] || LANG_DEFAULT="en_US.UTF-8"
     KEYMAP_DEFAULT="us"
@@ -176,7 +175,7 @@ KEYMAP="${KEYMAP//$'\r'/}"; KEYMAP="${KEYMAP//$'\n'/}"
 [[ -n "$KEYMAP" ]] || KEYMAP="$KEYMAP_DEFAULT"
 
 # Kernels
-KERNELS="$(pick_one "Ядро/ядра" \
+KERNELS="$(pick_one "Kernel(s)" \
   "linux" \
   "linux-lts" \
   "linux-zen" \
@@ -186,7 +185,7 @@ KERNELS="$(pick_one "Ядро/ядра" \
   "linux + linux-lts + linux-zen")"
 
 # Desktop
-DE="$(pick_one "DE" "none" "GNOME" "KDE Plasma" "XFCE" "i3")"
+DE="$(pick_one "Desktop Environment" "none" "GNOME" "KDE Plasma" "XFCE" "i3")"
 
 # GPU
 GPU_AUTO="$(gpu_detect)"
@@ -194,7 +193,7 @@ CPU_AUTO="$(cpu_detect)"
 echo "Detected CPU: $CPU_AUTO"
 echo "Detected GPU: $GPU_AUTO"
 
-GPU="$(pick_one "GPU драйвер" \
+GPU="$(pick_one "GPU driver" \
   "auto ($GPU_AUTO)" \
   "intel" \
   "amd" \
@@ -203,6 +202,7 @@ GPU="$(pick_one "GPU драйвер" \
   "nouveau (open)" \
   "skip")"
 [[ "$GPU" == auto* ]] && GPU="$GPU_AUTO"
+[[ "$GPU" == "intel+nvidia (hybrid, DKMS)" ]] && GPU="intel+nvidia"
 
 # Microcode
 UCODE="$(pick_one "CPU microcode" "auto ($CPU_AUTO)" "intel-ucode" "amd-ucode" "skip")"
@@ -223,11 +223,11 @@ case "$SWAP_OPT" in
 esac
 
 # Steam
-INSTALL_STEAM="$(pick_one "Установить Steam?" "no" "yes")"
-[[ "$INSTALL_STEAM" == "yes" ]] && INSTALL_STEAM=1 || INSTALL_STEAM=0
+INSTALL_STEAM="$(pick_one "Install Steam?" "No" "Yes")"
+[[ "$INSTALL_STEAM" == "Yes" ]] && INSTALL_STEAM=1 || INSTALL_STEAM=0
 
 # ===== Package list =====
-say "Сбор пакетов"
+say "Building package list"
 
 PKGS=(base base-devel linux-firmware networkmanager sudo grub efibootmgr dosfstools mtools os-prober
       vim nano git wget curl)
@@ -267,9 +267,9 @@ PKGS+=(mesa)
 # GPU-specific
 case "$GPU" in
   intel) PKGS+=(vulkan-intel) ;;
-  amd) PKGS+=(vulkan-radeon) ;;
+  amd)   PKGS+=(vulkan-radeon) ;;
   nvidia) PKGS+=(dkms nvidia-dkms nvidia-utils nvidia-settings) ;;
-  "intel+nvidia (hybrid, DKMS)") PKGS+=(dkms nvidia-dkms nvidia-utils nvidia-settings vulkan-intel nvidia-prime) ;;
+  intel+nvidia) PKGS+=(dkms nvidia-dkms nvidia-utils nvidia-settings vulkan-intel nvidia-prime) ;;
   nouveau) PKGS+=(xf86-video-nouveau) ;;
   skip|unknown) ;;
 esac
@@ -297,20 +297,20 @@ case "$DE" in
     ;;
 esac
 
-say "Установка базовой системы (pacstrap -> /mnt)"
+say "Installing base system (pacstrap -> /mnt)"
 pacstrap /mnt "${PKGS[@]}"
 
-say "fstab"
+say "Generating fstab"
 genfstab -U /mnt >> /mnt/etc/fstab
 
 # Steam: enable multilib in target before chroot pacman
 if [[ "$INSTALL_STEAM" -eq 1 ]]; then
-  say "Включение multilib (для Steam)"
+  say "Enabling multilib (for Steam)"
   enable_multilib_in_target
 fi
 
 # ===== CHROOT =====
-say "Конфиг внутри установленной системы (arch-chroot)"
+say "Configuring installed system (arch-chroot)"
 
 arch-chroot /mnt /usr/bin/env \
   HOSTNAME="$HOSTNAME" USERNAME="$USERNAME" USER_PASS="$USER_PASS" \
@@ -330,7 +330,6 @@ IFS=',' read -r -a LOCALES <<< "$LOCALES_RAW"
 for L in "${LOCALES[@]}"; do
   L="$(echo "$L" | xargs)"
   [[ -n "$L" ]] || continue
-  # escape for sed
   esc="$(printf '%s' "$L" | sed 's/[.[\*^$(){}?+|/]/\\&/g')"
   sed -i "s/^#\(${esc}\)$/\1/" /etc/locale.gen || true
 done
@@ -355,7 +354,7 @@ echo "==> users"
 useradd -m -G wheel,audio,video,optical,storage "$USERNAME"
 echo "$USERNAME:$USER_PASS" | chpasswd
 
-if [[ "$SET_ROOT" == "Да" ]]; then
+if [[ "$SET_ROOT" == "Yes" ]]; then
   echo "root:$ROOT_PASS" | chpasswd
 fi
 
@@ -375,7 +374,7 @@ if [[ "$SWAP_GB" -gt 0 ]]; then
 fi
 
 echo "==> nvidia tweaks (if needed)"
-if [[ "$GPU" == "nvidia" || "$GPU" == "intel+nvidia (hybrid, DKMS)" ]]; then
+if [[ "$GPU" == "nvidia" || "$GPU" == "intel+nvidia" ]]; then
   mkdir -p /etc/modprobe.d
   echo "options nvidia_drm modeset=1" > /etc/modprobe.d/nvidia.conf
 fi
@@ -383,9 +382,8 @@ fi
 echo "==> initramfs"
 mkinitcpio -P
 
-echo "==> grub (UEFI)"
-# EFI_DIR is /boot/efi or /efi
-mountpoint -q "$EFI_DIR" || { echo "ESP not mounted inside chroot at $EFI_DIR"; exit 1; }
+echo "==> GRUB (UEFI)"
+mountpoint -q "$EFI_DIR" || { echo "ESP is not mounted inside chroot at $EFI_DIR"; exit 1; }
 grub-install --target=x86_64-efi --efi-directory="$EFI_DIR" --bootloader-id=GRUB --recheck
 grub-mkconfig -o /boot/grub/grub.cfg
 
@@ -396,20 +394,18 @@ fi
 
 echo "==> steam"
 if [[ "$INSTALL_STEAM" -eq 1 ]]; then
-  # multilib already enabled in /etc/pacman.conf by outer script
   pacman -Syu --noconfirm
   pacman -S --noconfirm steam
 
-  # lib32 graphics helpers (best effort)
   pacman -S --noconfirm lib32-mesa || true
   case "$GPU" in
-    intel|intel+nvidia*)
+    intel|intel+nvidia)
       pacman -S --noconfirm lib32-vulkan-intel || true
       ;;
     amd)
       pacman -S --noconfirm lib32-vulkan-radeon || true
       ;;
-    nvidia|intel+nvidia*)
+    nvidia|intel+nvidia)
       pacman -S --noconfirm lib32-nvidia-utils || true
       ;;
   esac
@@ -417,12 +413,12 @@ fi
 
 echo
 echo "===== DONE ====="
-echo "Дальше в live-среде:"
+echo "Next (in live ISO):"
 echo "  umount -R /mnt"
 echo "  reboot"
 CHROOT
 
-say "Готово. Лог: $LOG"
-echo "Дальше:"
+say "Finished. Log file: $LOG"
+echo "Next:"
 echo "  umount -R /mnt"
 echo "  reboot"
