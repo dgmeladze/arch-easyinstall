@@ -234,4 +234,4 @@ tail -n 50 /root/arch-install.log
 ---
 
 ## License
-MIT (or choose your license).
+GPL
