@@ -46,22 +46,28 @@ prompt_password_twice() {
 pick_one() {
   local title="$1"; shift
   local -a options=("$@")
-  echo
-  echo "$title"
+
+  # Print menu to STDERR so it is not captured by $(...)
+  echo "" >&2
+  echo "$title" >&2
   local i=1
   for o in "${options[@]}"; do
-    echo "  $i) $o"
+    echo "  $i) $o" >&2
     ((i++))
   done
+
   local choice
   while true; do
     read -rp "Enter number: " choice
-    [[ "$choice" =~ ^[0-9]+$ ]] || { echo "Please enter a number."; continue; }
-    (( choice >= 1 && choice <= ${#options[@]} )) || { echo "Valid range: 1..${#options[@]}"; continue; }
-    echo "${options[$((choice-1))]}"
-    return 0
+    [[ "$choice" =~ ^[0-9]+$ ]] || { echo "Please enter a number." >&2; continue; }
+    (( choice >= 1 && choice <= ${#options[@]} )) || { echo "Valid range: 1..${#options[@]}" >&2; continue; }
+    break
   done
+
+  # Only the selected value goes to STDOUT (captured into variable)
+  echo "${options[$((choice-1))]}"
 }
+
 
 validate_timezone() {
   local tz="$1"
